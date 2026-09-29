@@ -7,6 +7,25 @@ export type AppendPlan = {
   targetRange: string;
 };
 
+export type PreparedAppendJob =
+  | {
+      status: "ready";
+      preparedAt: string;
+      expiresAt: string;
+      spreadsheetToken: string;
+      targetSheetId: string;
+      values: PoolCellValue[];
+      startRow: number;
+      endRow: number;
+      targetRange: string;
+    }
+  | {
+      status: "skipped";
+      reason: "POOL_EMPTY";
+      preparedAt: string;
+      expiresAt: string;
+    };
+
 export type JobResult =
   | { status: "success"; count: number; startRow: number; endRow: number }
   | { status: "skipped"; reason: "POOL_EMPTY" };

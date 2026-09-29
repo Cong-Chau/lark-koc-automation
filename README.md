@@ -1,8 +1,9 @@
 # Lark KOC Automation
 
-Automation chạy hằng ngày lúc **09:00 theo giờ Việt Nam** để đọc dữ liệu từ
-Google Sheets Pool và append lần lượt vào **cột L** của sheet `KOC List Official`
-trên Lark.
+Automation chạy hằng ngày lúc **09:00 theo giờ Việt Nam** để append dữ liệu từ
+Google Sheets Pool vào **cột L** của sheet `KOC List Official` trên Lark.
+Production dùng flow 2 job: chuẩn bị dữ liệu trước 09:00, rồi đến 09:00 chỉ ghi
+payload đã chuẩn bị.
 
 ## Trạng thái triển khai
 
@@ -21,17 +22,21 @@ Các adapter Google/Lark, orchestration route và QStash runtime được theo d
 ```text
 User cập nhật Google Pool trước 09:00
               ↓
-QStash schedule: 09:00 Asia/Ho_Chi_Minh
+QStash prepare schedule: 08:59 Asia/Ho_Chi_Minh
               ↓
-Next.js Route Handler /api/append-koc
+POST /api/prepare-koc
               ↓
 Đọc Google Pool: <POOL_TAB>!A2:A
               ↓
 Đọc Lark target: <SHEET_ID>!L1:L
               ↓
-Tìm row cuối cùng có dữ liệu ở cột L
+Tính sẵn target range và lưu Redis
               ↓
-Một batch write vào L{start}:L{end}
+QStash append schedule: 09:00 Asia/Ho_Chi_Minh
+              ↓
+POST /api/append-koc
+              ↓
+Một batch write vào range đã chuẩn bị
 ```
 
 Pool chỉ được đọc và không bị clear, sửa hoặc đánh dấu processed. Thứ tự dữ liệu
@@ -46,10 +51,11 @@ với trạng thái `skipped` và không chạm vào Lark.
 - Google Sheets API v4 qua `googleapis`
 - Lark Open API qua `@larksuiteoapi/node-sdk`
 - Upstash QStash
+- Upstash Redis
 - Zod
 - pnpm `10.33.0`
 
-Không dùng database, queue riêng, lock phân tán hoặc storage idempotency cho MVP.
+Không dùng database riêng, queue riêng, lock phân tán hoặc idempotency cho MVP.
 
 ## Yêu cầu môi trường
 
@@ -58,7 +64,8 @@ Không dùng database, queue riêng, lock phân tán hoặc storage idempotency 
 - Một Google Cloud service account đã bật Google Sheets API.
 - Google Pool spreadsheet được share cho service account với quyền `Viewer`.
 - Lark app có quyền đọc/ghi spreadsheet đích.
-- Một QStash schedule trỏ tới deployment URL trên Vercel.
+- Upstash Redis REST database để lưu prepared payload ngắn hạn.
+- Hai QStash schedules trỏ tới deployment URL trên Vercel.
 
 ## Cài đặt và chạy local
 
@@ -85,6 +92,7 @@ Tạo `.env.local` ở local hoặc cấu hình các biến tương ứng trong 
 
 ```env
 DEV=false
+PREPARED_JOB_MAX_AGE_SECONDS=600
 
 # Google service account
 GOOGLE_SERVICE_ACCOUNT_EMAIL=
@@ -98,6 +106,10 @@ LARK_APP_SECRET=
 LARK_DOMAIN=lark
 LARK_WIKI_NODE_TOKEN=
 LARK_TARGET_SHEET_ID=
+
+# Upstash Redis prepared job cache
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
 ```
 
 `GOOGLE_POOL_SHEET_NAME` là tên tab bên trong Google Spreadsheet, không phải
@@ -110,26 +122,35 @@ Wiki node này sang spreadsheet object token trước khi gọi Sheets API.
 `DEV=true` bật log chi tiết từng step để debug local. Khi deploy production,
 đặt `DEV=false` để chỉ log sau khi ghi xong target sheet hoặc khi job lỗi.
 
+`PREPARED_JOB_MAX_AGE_SECONDS` giới hạn tuổi payload đã chuẩn bị. Production
+khuyến nghị `600` giây để job ghi không dùng nhầm dữ liệu cũ.
+
 Không commit private key, app secret, access token hoặc dữ liệu Pool vào Git.
 `QSTASH_TOKEN` chỉ dùng trong môi trường provisioning schedule, không cần đưa vào
 route runtime khi schedule được quản lý từ QStash Console.
 
 ## HTTP endpoint
 
-Endpoint mục tiêu của automation là:
+Endpoint chuẩn bị dữ liệu:
+
+```text
+POST /api/prepare-koc
+```
+
+Endpoint ghi dữ liệu:
 
 ```text
 POST /api/append-koc
 ```
 
-Endpoint được triển khai trong Subplan 5. Contract dự kiến:
+Contract ghi dữ liệu:
 
-| Tình huống                  |  HTTP | Response                                                 |
-| --------------------------- | ----: | -------------------------------------------------------- |
-| Append thành công           | `200` | `{ "status": "success", "count", "startRow", "endRow" }` |
-| Pool rỗng                   | `200` | `{ "status": "skipped", "reason": "POOL_EMPTY" }`        |
-| Method khác `POST`          | `405` | `{ "status": "error", "code": "METHOD_NOT_ALLOWED" }`    |
-| Config/provider/write error | `500` | `{ "status": "error" }`                                  |
+| Tình huống                        |  HTTP | Response                                                 |
+| --------------------------------- | ----: | -------------------------------------------------------- |
+| Append thành công                 | `200` | `{ "status": "success", "count", "startRow", "endRow" }` |
+| Pool rỗng                         | `200` | `{ "status": "skipped", "reason": "POOL_EMPTY" }`        |
+| Method khác `POST`                | `405` | `{ "status": "error", "code": "METHOD_NOT_ALLOWED" }`    |
+| Config/cache/provider/write error | `500` | `{ "status": "error" }`                                  |
 
 MVP giữ endpoint public theo quyết định đã duyệt. Vì không có authentication,
 deduplication hoặc lock, người biết URL có thể trigger lại job và tạo duplicate.
@@ -148,13 +169,23 @@ ghi database hoặc filesystem; khi server process restart thì log trong UI m�
 Trên serverless deployment, view này là best-effort theo instance hiện tại, phù
 hợp debug live nhẹ hơn là audit history.
 
-Dashboard cũng có nút `Run now` để gọi thủ công `POST /api/append-koc`. Manual
-trigger dùng cùng endpoint với QStash và có thể append dữ liệu thật vào Lark nếu
-Google Pool đang có dữ liệu.
+Dashboard có 2 nút thủ công:
+
+- `Chuẩn bị dữ liệu`: gọi `POST /api/prepare-koc`;
+- `Ghi dữ liệu đã chuẩn bị`: gọi `POST /api/append-koc`.
+
+Nút ghi có thể append dữ liệu thật vào Lark nếu prepared payload còn hạn.
 
 ## QStash schedule
 
-Sau khi deploy lên Vercel, tạo hoặc cập nhật một schedule cố định:
+Sau khi deploy lên Vercel, tạo hoặc cập nhật 2 schedule cố định:
+
+```text
+Destination: https://<vercel-domain>/api/prepare-koc
+Method: POST
+Cron: CRON_TZ=Asia/Ho_Chi_Minh 59 8 * * *
+Retries: 0
+```
 
 ```text
 Destination: https://<vercel-domain>/api/append-koc
@@ -163,9 +194,8 @@ Cron: CRON_TZ=Asia/Ho_Chi_Minh 0 9 * * *
 Retries: 0
 ```
 
-Không tạo nhiều schedule cho cùng một deployment. Thời điểm trigger là mục tiêu
-09:00:00 theo timezone Việt Nam; thời điểm dữ liệu thực sự xuất hiện trên Lark còn
-phụ thuộc vào thời gian xử lý, mạng và phản hồi provider.
+Không tạo nhiều schedule cùng gọi `/api/append-koc`. Xem hướng dẫn chi tiết tại
+[QStash two-job schedule](docs/runbooks/qstash-two-job-schedule.md).
 
 ## Cấu trúc dự án
 

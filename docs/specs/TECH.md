@@ -12,7 +12,7 @@ Các quyết định đã được duyệt:
 | Nguồn dữ liệu  | Google Sheets, cột A                                  |
 | Target         | Lark Sheet `KOC List Official`, cột L                 |
 | Lịch chạy      | Mỗi ngày lúc 09:00, `Asia/Ho_Chi_Minh`                |
-| Scheduler      | Upstash QStash                                        |
+| Scheduler      | Upstash QStash, 2 schedules                           |
 | Runtime        | Next.js App Router trên Vercel                        |
 | Google auth    | Service account, quyền Viewer trên Pool Sheet         |
 | Pool layout    | Header ở dòng 1, data từ `A2:A`                       |
@@ -23,7 +23,7 @@ Các quyết định đã được duyệt:
 | Write strategy | Một Lark batch write cho toàn bộ Pool                 |
 | Retry          | Không retry ở application; QStash `retries: 0`        |
 | Endpoint auth  | Public endpoint theo quyết định MVP; chấp nhận rủi ro |
-| Database       | Không dùng                                            |
+| Cache          | Upstash Redis, TTL ngắn cho prepared payload          |
 
 `TECH.md` mô tả cách triển khai kỹ thuật. Business requirement và acceptance
 criteria gốc vẫn nằm trong `lark_pool_automation_spec.md`.
@@ -37,9 +37,9 @@ Xây dựng một automation tối giản bằng TypeScript để:
 1. Trigger mỗi ngày lúc 09:00 theo múi giờ `Asia/Ho_Chi_Minh`.
 2. Đọc các giá trị hiện có trong Google Pool Sheet từ `A2:A`.
 3. Bỏ các cell rỗng nhưng giữ nguyên thứ tự và nội dung của các cell còn lại.
-4. Đọc cột L của Lark target `KOC List Official`.
-5. Tìm row cuối cùng có dữ liệu trong cột L.
-6. Ghi toàn bộ Pool values vào một range mới bên dưới dữ liệu cũ.
+4. Trước 09:00, đọc cột L của Lark target `KOC List Official`.
+5. Tìm row cuối cùng có dữ liệu trong cột L và lưu sẵn append plan.
+6. Đúng 09:00, ghi toàn bộ prepared Pool values vào range đã tính.
 7. Không ghi đè dữ liệu cũ, không sửa Pool Sheet và không dedupe.
 8. Dừng ngay khi có lỗi; không tự retry và không tự chạy bù.
 
@@ -54,18 +54,31 @@ chuẩn bị Google Pool Sheet trước 09:00.
 User cập nhật Google Pool Sheet trước 09:00
         │
         ▼
-Upstash QStash Schedule
+Upstash QStash Prepare Schedule
+CRON_TZ=Asia/Ho_Chi_Minh 59 8 * * *
+        │ POST, retries=0
+        ▼
+Vercel / Next.js
+POST /api/prepare-koc
+        │
+        ├── Google Sheets API
+        │     └── Read <POOL_TAB>!A2:A
+        │
+        └── Lark Sheets API
+              └── Read <TARGET_SHEET_ID>!L1:L
+        │
+        ▼
+Upstash Redis
+        │
+        ▼
+Upstash QStash Append Schedule
 CRON_TZ=Asia/Ho_Chi_Minh 0 9 * * *
         │ POST, retries=0
         ▼
 Vercel / Next.js
 POST /api/append-koc
         │
-        ├── Google Sheets API
-        │     └── Read <POOL_TAB>!A2:A
-        │
         └── Lark Sheets API
-              ├── Read <TARGET_SHEET_ID>!L1:L
               └── Write <TARGET_SHEET_ID>!L{start}:L{end}
 ```
 
@@ -76,9 +89,10 @@ cố đoán phần nào đã ghi và không tự gửi lại.
 Kiến trúc ưu tiên:
 
 - ít service;
-- không database;
+- không database lâu dài;
 - không queue riêng ngoài QStash;
 - không lock hoặc idempotency store;
+- Redis chỉ lưu prepared payload với TTL ngắn;
 - một batch write duy nhất;
 - dễ deploy và maintain;
 - chi phí vận hành thấp.
@@ -104,6 +118,7 @@ ghi thực tế vẫn phụ thuộc vào delivery, thời gian chạy function, 
 | API                | Next.js Route Handler                       |
 | Hosting            | Vercel                                      |
 | Scheduler          | `@upstash/qstash`                           |
+| Prepared cache     | `@upstash/redis`                            |
 | Google integration | Google Sheets API v4 qua `googleapis`       |
 | Lark integration   | Lark Open API qua `@larksuiteoapi/node-sdk` |
 | Validation         | `zod`                                       |
@@ -114,6 +129,7 @@ Dependencies hiện có trong repo:
 
 - `next`
 - `@upstash/qstash`
+- `@upstash/redis`
 - `@larksuiteoapi/node-sdk`
 - `zod`
 
@@ -123,8 +139,8 @@ Dependency cần bổ sung khi implement:
 googleapis
 ```
 
-Không cần Prisma, Drizzle, Supabase, PostgreSQL, Redis, BullMQ, Express hoặc
-Axios riêng cho flow này.
+Không cần Prisma, Drizzle, Supabase, PostgreSQL, BullMQ, Express hoặc Axios
+riêng cho flow này.
 
 ---
 
@@ -135,6 +151,8 @@ Repo hiện dùng App Router ở root `app/`, không dùng `src/`.
 ```text
 app/
 └── api/
+    ├── prepare-koc/
+    │   └── route.ts
     └── append-koc/
         └── route.ts
 
@@ -145,6 +163,7 @@ lib/
 ├── lark-sheets.ts
 ├── append-koc.ts
 ├── append-plan.ts
+├── prepared-job-store.ts
 └── errors.ts
 
 types/
@@ -153,11 +172,19 @@ types/
 
 ### Trách nhiệm module
 
+`app/api/prepare-koc/route.ts`
+
+- chỉ nhận `POST`;
+- tạo `runId`;
+- gọi prepare orchestration;
+- map prepared payload thành HTTP response;
+- không chứa logic provider.
+
 `app/api/append-koc/route.ts`
 
 - chỉ nhận `POST`;
 - tạo `runId`;
-- gọi orchestration;
+- gọi append prepared orchestration;
 - map result thành HTTP response;
 - không chứa logic tìm row hoặc logic provider.
 
@@ -198,10 +225,17 @@ types/
 
 `lib/append-koc.ts`
 
-- orchestration thứ tự Google read → empty check → Lark read → plan → Lark
+- orchestration prepare: Google read → empty check → Lark read → plan → Redis
   write;
+- orchestration append: Redis read → freshness check → Lark write;
 - không retry;
 - ghi structured logs.
+
+`lib/prepared-job-store.ts`
+
+- đọc/ghi prepared payload vào Upstash Redis;
+- TTL ngắn;
+- validate shape tối thiểu trước khi append job dùng payload.
 
 ---
 
@@ -211,6 +245,7 @@ types/
 
 ```env
 DEV=false
+PREPARED_JOB_MAX_AGE_SECONDS=600
 
 # Google service account
 GOOGLE_SERVICE_ACCOUNT_EMAIL=
@@ -224,6 +259,10 @@ LARK_APP_SECRET=
 LARK_DOMAIN=lark
 LARK_WIKI_NODE_TOKEN=
 LARK_TARGET_SHEET_ID=
+
+# Upstash Redis prepared job cache
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
 ```
 
 `QSTASH_TOKEN` là credential dùng khi tạo/cập nhật schedule bằng CLI hoặc
@@ -233,6 +272,9 @@ script provisioning. Nó không cần được đưa vào runtime function nếu
 
 `DEV=true` bật runtime log chi tiết từng step cho local/debug. Production dùng
 `DEV=false` để chỉ log sau khi ghi xong target sheet hoặc khi job lỗi.
+
+`PREPARED_JOB_MAX_AGE_SECONDS` giới hạn tuổi payload đã chuẩn bị. Nếu append job
+không chạy trong thời hạn này, job fail thay vì dùng dữ liệu cũ.
 
 `GOOGLE_POOL_SHEET_NAME` là tên tab bên trong Google Spreadsheet, không phải
 spreadsheet ID. Không hard-code tên `Sheet1`.
@@ -462,7 +504,7 @@ Không coi HTTP 200 là đủ nếu body của Lark báo business error.
 ## 9. Business algorithm
 
 ```text
-START append-koc job
+START prepare-koc job
 
 1. Create runId and load/validate config.
 
@@ -473,33 +515,51 @@ START append-koc job
 4. Remove null/undefined/empty-string cells only.
 
 5. If values.length === 0:
-      log skipped
+      save skipped prepared payload to Redis
       return HTTP 200 { status: "skipped", reason: "POOL_EMPTY" }
 
-6. Read Lark target range <TARGET_SHEET_ID>!L1:L.
+6. Resolve Lark Wiki node to spreadsheet token.
 
-7. Parse the returned A1 range and values.
+7. Read Lark target range <TARGET_SHEET_ID>!L1:L.
 
-8. Find the last row whose L cell is occupied.
+8. Parse the returned A1 range and values.
 
-9. firstInsertRow = max(2, lastOccupiedRow + 1)
-   endRow = firstInsertRow + values.length - 1
+9. Find the last row whose L cell is occupied.
 
-10. Build target range <TARGET_SHEET_ID>!L{firstInsertRow}:L{endRow}.
+10. firstInsertRow = max(2, lastOccupiedRow + 1)
+    endRow = firstInsertRow + values.length - 1
 
-11. Build one-column matrix: values.map(value => [value]).
+11. Build target range <TARGET_SHEET_ID>!L{firstInsertRow}:L{endRow}.
 
-12. PUT one Lark values request.
+12. Save values, target range, spreadsheet token, preparedAt, expiresAt to Redis.
 
-13. If provider success:
+END prepare-koc job
+
+START append-koc job
+
+1. Create runId and load/validate config.
+
+2. Read prepared payload from Redis.
+
+3. If payload is missing, malformed, or expired:
+      return HTTP 500 { status: "error" }
+
+4. If payload is POOL_EMPTY:
+      return HTTP 200 { status: "skipped", reason: "POOL_EMPTY" }
+
+5. Build one-column matrix: values.map(value => [value]).
+
+6. PUT one Lark values request to the precomputed target range.
+
+7. If provider success:
       log success
       return HTTP 200 with count/startRow/endRow
 
-14. If any step fails:
+8. If any step fails:
       log sanitized error
       return HTTP 500 { status: "error" }
 
-END
+END append-koc job
 ```
 
 ### Last occupied row
@@ -539,7 +599,13 @@ Không ghi vào L1.
 
 ## 10. HTTP endpoint
 
-Endpoint:
+Prepare endpoint:
+
+```text
+POST /api/prepare-koc
+```
+
+Append endpoint:
 
 ```text
 POST /api/append-koc
@@ -552,10 +618,11 @@ Behavior:
 | Append thành công                 |  200 | `success` + count/range  |
 | Pool rỗng                         |  200 | `skipped` + `POOL_EMPTY` |
 | Method khác POST                  |  405 | method error tối giản    |
-| Config/provider/range/write error |  500 | `{ "status": "error" }`  |
+| Config/cache/provider/write error |  500 | `{ "status": "error" }`  |
 
-Route không nhận request body. Mỗi lần gọi đều đọc trạng thái mới nhất của
-Google Pool và Lark target.
+Route không nhận request body. Chỉ prepare endpoint đọc trạng thái mới nhất của
+Google Pool và Lark target. Append endpoint chỉ đọc prepared payload còn hạn rồi
+ghi thẳng vào target range đã tính.
 
 Route không dùng cache. Không expose GET endpoint để tránh biến việc kiểm tra
 trạng thái thành một operation không được thiết kế.
@@ -610,15 +677,16 @@ append lại. Đây là behavior đã được chấp nhận.
 
 ### Concurrent calls
 
-Không có distributed lock. Hai request đồng thời có thể:
+Không có distributed lock. Hai prepare request đồng thời có thể:
 
 1. cùng đọc cùng một `lastOccupiedRow`;
 2. cùng tính cùng một target range;
-3. ghi chồng lên nhau.
+3. ghi đè prepared payload trong Redis.
 
-MVP không giải quyết case này bằng database, Redis, QStash flow control hoặc
-idempotency key. Nếu sau này cần đảm bảo không mất data, phải mở một design
-phase mới; không được tự thêm một cơ chế nửa vời vào implementation hiện tại.
+Append request đồng thời vẫn có thể ghi cùng một prepared payload nhiều lần.
+Redis trong MVP chỉ là cache ngắn hạn, không phải lock hoặc idempotency key.
+Nếu sau này cần đảm bảo không mất data, phải mở một design phase mới; không
+được tự thêm một cơ chế nửa vời vào implementation hiện tại.
 
 ---
 
@@ -640,6 +708,9 @@ Lark read error
 Range/shape error
   → stop, không write
 
+Prepared payload missing/expired/invalid
+  → 500, không fallback sang đọc live
+
 Lark write error
   → 500, không retry
 ```
@@ -653,6 +724,11 @@ Các lỗi cần phân loại trong log:
 - `LARK_READ_FAILED`;
 - `TARGET_RANGE_INVALID`;
 - `LARK_WRITE_FAILED`;
+- `REDIS_READ_FAILED`;
+- `REDIS_WRITE_FAILED`;
+- `PREPARED_JOB_MISSING`;
+- `PREPARED_JOB_EXPIRED`;
+- `PREPARED_JOB_INVALID`;
 - `PROVIDER_RESPONSE_INVALID`;
 - `JOB_TIMEOUT`.
 
@@ -704,7 +780,8 @@ Không log:
 Runtime monitor:
 
 - `/` hiển thị các event gần nhất;
-- dashboard có manual trigger gọi `POST /api/append-koc` sau confirm;
+- dashboard có manual trigger cho `POST /api/prepare-koc` và
+  `POST /api/append-koc` sau confirm;
 - `GET /api/logs` trả JSON snapshot;
 - buffer giữ tối đa 200 event trong memory;
 - restart process làm mất UI log;
@@ -769,9 +846,10 @@ Chỉ dùng test sheets trước khi production:
 1. Tạo Google Pool test có header và 3 username ở A2:A4.
 2. Tạo/copy Lark target test có header ở L1.
 3. Cấu hình local env.
-4. Gọi:
+4. Gọi prepare rồi append:
 
    ```bash
+   curl -X POST http://localhost:3000/api/prepare-koc
    curl -X POST http://localhost:3000/api/append-koc
    ```
 
@@ -802,14 +880,21 @@ Set Vercel environment variables
       ↓
 Verify Google service-account sharing
       ↓
-Create QStash schedule
+Create QStash prepare and append schedules
       ↓
 Manual production smoke test
       ↓
 Daily 09:00 operation
 ```
 
-QStash schedule cần có:
+QStash schedules cần có:
+
+```text
+Destination: https://<vercel-domain>/api/prepare-koc
+Method: POST
+Cron: CRON_TZ=Asia/Ho_Chi_Minh 59 8 * * *
+Retries: 0
+```
 
 ```text
 Destination: https://<vercel-domain>/api/append-koc
@@ -818,8 +903,8 @@ Cron: CRON_TZ=Asia/Ho_Chi_Minh 0 9 * * *
 Retries: 0
 ```
 
-Nên dùng một `scheduleId` cố định để tránh tạo nhiều schedule trùng nhau khi
-deploy hoặc setup lại.
+Nên dùng `scheduleId` cố định để tránh tạo nhiều schedule trùng nhau khi deploy
+hoặc setup lại. Không tạo nhiều schedule cùng gọi append endpoint.
 
 Manual production smoke test phải dùng Pool nhỏ và có thể kiểm tra range vừa
 ghi. Vì endpoint public và không idempotent, không gọi thử nhiều lần tùy ý.
@@ -833,9 +918,12 @@ ghi. Vì endpoint public và không idempotent, không gọi thử nhiều lần
 - [ ] Google Sheets API đã enable.
 - [ ] Lark app có quyền đọc Wiki node và đọc/ghi target spreadsheet.
 - [ ] Vercel env có đủ config và không commit credential.
-- [ ] QStash dùng `CRON_TZ=Asia/Ho_Chi_Minh 0 9 * * *`.
+- [ ] Upstash Redis env đã cấu hình.
+- [ ] Prepared payload có max age ngắn, khuyến nghị 600 giây.
+- [ ] QStash prepare dùng `CRON_TZ=Asia/Ho_Chi_Minh 59 8 * * *`.
+- [ ] QStash append dùng `CRON_TZ=Asia/Ho_Chi_Minh 0 9 * * *`.
 - [ ] QStash retries được đặt bằng `0`.
-- [ ] Endpoint nhận POST và route không cache.
+- [ ] Prepare và append endpoint nhận POST và route không cache.
 - [ ] Pool empty trả `200 skipped` và không chạm target.
 - [ ] Target L1 được reserved; data mới bắt đầu tối thiểu từ L2.
 - [ ] Khoảng trống giữa các row L không bị lấp.
