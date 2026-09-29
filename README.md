@@ -84,6 +84,8 @@ phân biệt lỗi nền của repository với lỗi trong source automation đ
 Tạo `.env.local` ở local hoặc cấu hình các biến tương ứng trong Vercel:
 
 ```env
+DEV=false
+
 # Google service account
 GOOGLE_SERVICE_ACCOUNT_EMAIL=
 GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY=
@@ -94,13 +96,19 @@ GOOGLE_POOL_SHEET_NAME=
 LARK_APP_ID=
 LARK_APP_SECRET=
 LARK_DOMAIN=lark
-LARK_TARGET_SPREADSHEET_TOKEN=
+LARK_WIKI_NODE_TOKEN=
 LARK_TARGET_SHEET_ID=
 ```
 
 `GOOGLE_POOL_SHEET_NAME` là tên tab bên trong Google Spreadsheet, không phải
 spreadsheet ID. Private key có thể được lưu dưới dạng chuỗi có `\n`; runtime sẽ
 normalize thành newline thật.
+
+`LARK_WIKI_NODE_TOKEN` là token trong URL `/wiki/<token>`. Runtime sẽ resolve
+Wiki node này sang spreadsheet object token trước khi gọi Sheets API.
+
+`DEV=true` bật log chi tiết từng step để debug local. Khi deploy production,
+đặt `DEV=false` để chỉ log sau khi ghi xong target sheet hoặc khi job lỗi.
 
 Không commit private key, app secret, access token hoặc dữ liệu Pool vào Git.
 `QSTASH_TOKEN` chỉ dùng trong môi trường provisioning schedule, không cần đưa vào
@@ -116,15 +124,33 @@ POST /api/append-koc
 
 Endpoint được triển khai trong Subplan 5. Contract dự kiến:
 
-| Tình huống | HTTP | Response |
-| --- | ---: | --- |
-| Append thành công | `200` | `{ "status": "success", "count", "startRow", "endRow" }` |
-| Pool rỗng | `200` | `{ "status": "skipped", "reason": "POOL_EMPTY" }` |
-| Method khác `POST` | `405` | `{ "status": "error", "code": "METHOD_NOT_ALLOWED" }` |
-| Config/provider/write error | `500` | `{ "status": "error" }` |
+| Tình huống                  |  HTTP | Response                                                 |
+| --------------------------- | ----: | -------------------------------------------------------- |
+| Append thành công           | `200` | `{ "status": "success", "count", "startRow", "endRow" }` |
+| Pool rỗng                   | `200` | `{ "status": "skipped", "reason": "POOL_EMPTY" }`        |
+| Method khác `POST`          | `405` | `{ "status": "error", "code": "METHOD_NOT_ALLOWED" }`    |
+| Config/provider/write error | `500` | `{ "status": "error" }`                                  |
 
 MVP giữ endpoint public theo quyết định đã duyệt. Vì không có authentication,
 deduplication hoặc lock, người biết URL có thể trigger lại job và tạo duplicate.
+
+## Runtime monitor
+
+Trang `/` hiển thị các runtime event gần nhất từ process hiện tại. App cũng cung
+cấp:
+
+```text
+GET /api/logs
+```
+
+Log UI dùng in-memory ring buffer và vẫn mirror ra console/Vercel logs. Không
+ghi database hoặc filesystem; khi server process restart thì log trong UI mất.
+Trên serverless deployment, view này là best-effort theo instance hiện tại, phù
+hợp debug live nhẹ hơn là audit history.
+
+Dashboard cũng có nút `Run now` để gọi thủ công `POST /api/append-koc`. Manual
+trigger dùng cùng endpoint với QStash và có thể append dữ liệu thật vào Lark nếu
+Google Pool đang có dữ liệu.
 
 ## QStash schedule
 

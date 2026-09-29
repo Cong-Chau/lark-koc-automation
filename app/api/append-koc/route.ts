@@ -1,10 +1,8 @@
 import { randomUUID } from "node:crypto";
 
-import {
-  runAppendKoc,
-  type AppendTrigger,
-} from "@/lib/append-koc";
+import { runAppendKoc, type AppendTrigger } from "@/lib/append-koc";
 import { toSafeErrorFields } from "@/lib/errors";
+import { logRuntimeError } from "@/lib/runtime-log";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,15 +27,18 @@ export async function POST(request: Request): Promise<Response> {
     const result = await runAppendKoc(runId, undefined, trigger);
     return Response.json(result, { status: 200 });
   } catch (error) {
-    console.error(
-      JSON.stringify({
-        runId,
-        trigger,
-        status: "error",
+    logRuntimeError({
+      operation: "append-koc",
+      runId,
+      trigger,
+      phase: "job_failed",
+      message: "Job append KOC thất bại",
+      status: "error",
+      details: {
         durationMs: Date.now() - startedAt,
         ...toSafeErrorFields(error),
-      }),
-    );
+      },
+    });
 
     return Response.json({ status: "error" }, { status: 500 });
   }

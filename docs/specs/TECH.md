@@ -7,23 +7,23 @@ Tài liệu này là baseline kỹ thuật cho automation được mô tả tron
 
 Các quyết định đã được duyệt:
 
-| Hạng mục | Quyết định |
-| --- | --- |
-| Nguồn dữ liệu | Google Sheets, cột A |
-| Target | Lark Sheet `KOC List Official`, cột L |
-| Lịch chạy | Mỗi ngày lúc 09:00, `Asia/Ho_Chi_Minh` |
-| Scheduler | Upstash QStash |
-| Runtime | Next.js App Router trên Vercel |
-| Google auth | Service account, quyền Viewer trên Pool Sheet |
-| Pool layout | Header ở dòng 1, data từ `A2:A` |
-| Target layout | Header ở `L1`, data bắt đầu từ `L2` |
-| Append | Tìm row có dữ liệu cuối cùng, ghi batch bên dưới |
-| Duplicate | Không kiểm tra duplicate dữ liệu |
-| Job duplicate | Chấp nhận at-least-once; không idempotency/lock |
-| Write strategy | Một Lark batch write cho toàn bộ Pool |
-| Retry | Không retry ở application; QStash `retries: 0` |
-| Endpoint auth | Public endpoint theo quyết định MVP; chấp nhận rủi ro |
-| Database | Không dùng |
+| Hạng mục       | Quyết định                                            |
+| -------------- | ----------------------------------------------------- |
+| Nguồn dữ liệu  | Google Sheets, cột A                                  |
+| Target         | Lark Sheet `KOC List Official`, cột L                 |
+| Lịch chạy      | Mỗi ngày lúc 09:00, `Asia/Ho_Chi_Minh`                |
+| Scheduler      | Upstash QStash                                        |
+| Runtime        | Next.js App Router trên Vercel                        |
+| Google auth    | Service account, quyền Viewer trên Pool Sheet         |
+| Pool layout    | Header ở dòng 1, data từ `A2:A`                       |
+| Target layout  | Header ở `L1`, data bắt đầu từ `L2`                   |
+| Append         | Tìm row có dữ liệu cuối cùng, ghi batch bên dưới      |
+| Duplicate      | Không kiểm tra duplicate dữ liệu                      |
+| Job duplicate  | Chấp nhận at-least-once; không idempotency/lock       |
+| Write strategy | Một Lark batch write cho toàn bộ Pool                 |
+| Retry          | Không retry ở application; QStash `retries: 0`        |
+| Endpoint auth  | Public endpoint theo quyết định MVP; chấp nhận rủi ro |
+| Database       | Không dùng                                            |
 
 `TECH.md` mô tả cách triển khai kỹ thuật. Business requirement và acceptance
 criteria gốc vẫn nằm trong `lark_pool_automation_spec.md`.
@@ -97,18 +97,18 @@ ghi thực tế vẫn phụ thuộc vào delivery, thời gian chạy function, 
 
 ## 4. Tech stack
 
-| Thành phần | Công nghệ |
-| --- | --- |
-| Language | TypeScript |
-| Framework | Next.js 16 App Router |
-| API | Next.js Route Handler |
-| Hosting | Vercel |
-| Scheduler | `@upstash/qstash` |
-| Google integration | Google Sheets API v4 qua `googleapis` |
-| Lark integration | Lark Open API qua `@larksuiteoapi/node-sdk` |
-| Validation | `zod` |
-| Logging | Vercel runtime logs |
-| Database | Không dùng |
+| Thành phần         | Công nghệ                                   |
+| ------------------ | ------------------------------------------- |
+| Language           | TypeScript                                  |
+| Framework          | Next.js 16 App Router                       |
+| API                | Next.js Route Handler                       |
+| Hosting            | Vercel                                      |
+| Scheduler          | `@upstash/qstash`                           |
+| Google integration | Google Sheets API v4 qua `googleapis`       |
+| Lark integration   | Lark Open API qua `@larksuiteoapi/node-sdk` |
+| Validation         | `zod`                                       |
+| Logging            | Vercel runtime logs                         |
+| Database           | Không dùng                                  |
 
 Dependencies hiện có trong repo:
 
@@ -210,6 +210,8 @@ types/
 ### 6.1. Runtime variables
 
 ```env
+DEV=false
+
 # Google service account
 GOOGLE_SERVICE_ACCOUNT_EMAIL=
 GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY=
@@ -220,7 +222,7 @@ GOOGLE_POOL_SHEET_NAME=
 LARK_APP_ID=
 LARK_APP_SECRET=
 LARK_DOMAIN=lark
-LARK_TARGET_SPREADSHEET_TOKEN=
+LARK_WIKI_NODE_TOKEN=
 LARK_TARGET_SHEET_ID=
 ```
 
@@ -229,15 +231,21 @@ script provisioning. Nó không cần được đưa vào runtime function nếu
 được quản lý từ QStash Console. Nếu repo có script provision schedule, script
 đó đọc `QSTASH_TOKEN` từ env riêng và không bundle token vào route.
 
+`DEV=true` bật runtime log chi tiết từng step cho local/debug. Production dùng
+`DEV=false` để chỉ log sau khi ghi xong target sheet hoặc khi job lỗi.
+
 `GOOGLE_POOL_SHEET_NAME` là tên tab bên trong Google Spreadsheet, không phải
 spreadsheet ID. Không hard-code tên `Sheet1`.
 
 Lark target hiện được mô tả bởi:
 
-- spreadsheet: `KOC List Official` theo URL trong spec;
+- Wiki node: `LARK_WIKI_NODE_TOKEN` lấy từ URL `/wiki/<token>`;
 - sheet ID: giá trị cấu hình tương ứng, hiện có thể tham chiếu từ URL nhưng
   phải lưu riêng trong env;
 - column: `L`.
+
+Runtime dùng Wiki API để resolve Wiki node sang spreadsheet object token trước
+khi gọi Sheets API. Không cần cấu hình `LARK_TARGET_SPREADSHEET_TOKEN` thủ công.
 
 ### 6.2. Google service account
 
@@ -273,6 +281,9 @@ Lark app phải có quyền đọc và ghi spreadsheet target. Vì target dùng 
 domain, client phải được khởi tạo với `LARK_DOMAIN=lark` hoặc enum tương ứng,
 không dùng mặc định Feishu. Lark client dùng app
 credentials để lấy tenant access token theo cơ chế của SDK.
+
+Nếu target URL ở dạng Wiki, app cũng cần quyền đọc Wiki node để resolve
+underlying spreadsheet object token.
 
 Không đưa `tenant_access_token` vào environment variable thủ công nếu SDK đã
 quản lý lifecycle token.
@@ -406,6 +417,7 @@ v2 values API; không tự đoán tên method.
 Các operation cần có:
 
 ```text
+GET /open-apis/wiki/v2/spaces/get_node?token={wikiNodeToken}&obj_type=wiki
 GET /open-apis/sheets/v2/spreadsheets/{spreadsheetToken}/values/{range}
 PUT /open-apis/sheets/v2/spreadsheets/{spreadsheetToken}/values
 ```
@@ -535,12 +547,12 @@ POST /api/append-koc
 
 Behavior:
 
-| Tình huống | HTTP | Body |
-| --- | ---: | --- |
-| Append thành công | 200 | `success` + count/range |
-| Pool rỗng | 200 | `skipped` + `POOL_EMPTY` |
-| Method khác POST | 405 | method error tối giản |
-| Config/provider/range/write error | 500 | `{ "status": "error" }` |
+| Tình huống                        | HTTP | Body                     |
+| --------------------------------- | ---: | ------------------------ |
+| Append thành công                 |  200 | `success` + count/range  |
+| Pool rỗng                         |  200 | `skipped` + `POOL_EMPTY` |
+| Method khác POST                  |  405 | method error tối giản    |
+| Config/provider/range/write error |  500 | `{ "status": "error" }`  |
 
 Route không nhận request body. Mỗi lần gọi đều đọc trạng thái mới nhất của
 Google Pool và Lark target.
@@ -652,7 +664,8 @@ operator phải kiểm tra target thủ công trước khi chạy lại.
 
 ## 13. Logging và observability
 
-Không dùng database cho job history. Dùng structured logs trên Vercel.
+Không dùng database cho job history. Dùng structured logs trên Vercel và một
+in-memory runtime monitor cho debug nhẹ trong process hiện tại.
 
 Mỗi run có `runId = crypto.randomUUID()` và tối thiểu các field:
 
@@ -688,7 +701,17 @@ Không log:
 - toàn bộ Pool values;
 - raw provider response nếu response có dữ liệu nhạy cảm.
 
-Không có dashboard, notification, alerting service hoặc job history trong MVP.
+Runtime monitor:
+
+- `/` hiển thị các event gần nhất;
+- dashboard có manual trigger gọi `POST /api/append-koc` sau confirm;
+- `GET /api/logs` trả JSON snapshot;
+- buffer giữ tối đa 200 event trong memory;
+- restart process làm mất UI log;
+- serverless deployment có thể rotate instance nên view này là best-effort,
+  không thay thế Vercel logs hoặc audit storage.
+
+Không có notification, alerting service hoặc persisted job history trong MVP.
 
 ---
 
@@ -808,7 +831,7 @@ ghi. Vì endpoint public và không idempotent, không gọi thử nhiều lần
 - [ ] Google Pool có header ở row 1 và data ở cột A từ row 2.
 - [ ] Service account được share Google Pool với quyền Viewer.
 - [ ] Google Sheets API đã enable.
-- [ ] Lark app có quyền đọc/ghi target spreadsheet.
+- [ ] Lark app có quyền đọc Wiki node và đọc/ghi target spreadsheet.
 - [ ] Vercel env có đủ config và không commit credential.
 - [ ] QStash dùng `CRON_TZ=Asia/Ho_Chi_Minh 0 9 * * *`.
 - [ ] QStash retries được đặt bằng `0`.
@@ -852,17 +875,17 @@ Không nằm trong implementation hiện tại:
 
 ## 18. Technical risks cần giữ rõ
 
-| Risk | Ảnh hưởng | Cách xử lý MVP |
-| --- | --- | --- |
-| Public endpoint | Người biết URL có thể trigger | Chấp nhận, ghi rõ limitation |
-| Gọi lại cùng ngày | Append trùng | Chấp nhận at-least-once |
-| Concurrent calls | Ghi chồng vùng | Không lock; operator tránh gọi đồng thời |
-| Lark write timeout | Không biết write đã commit chưa | Không retry; kiểm tra thủ công |
-| Service-account key | Lộ credential nếu quản lý sai | Vercel secret, không commit file |
-| Google/Lark quota | Request fail | Một Google read + một Lark read + một Lark write |
-| Sheet schema đổi | Range/read/write fail | Fail fast, log provider error |
-| Pool chứa type lạ | Mapping không xác định | Reject thay vì stringify âm thầm |
-| Trigger timing | Không bảo đảm 09:00:00.000 | Chỉ cam kết trigger gần 09:00 |
+| Risk                | Ảnh hưởng                       | Cách xử lý MVP                                   |
+| ------------------- | ------------------------------- | ------------------------------------------------ |
+| Public endpoint     | Người biết URL có thể trigger   | Chấp nhận, ghi rõ limitation                     |
+| Gọi lại cùng ngày   | Append trùng                    | Chấp nhận at-least-once                          |
+| Concurrent calls    | Ghi chồng vùng                  | Không lock; operator tránh gọi đồng thời         |
+| Lark write timeout  | Không biết write đã commit chưa | Không retry; kiểm tra thủ công                   |
+| Service-account key | Lộ credential nếu quản lý sai   | Vercel secret, không commit file                 |
+| Google/Lark quota   | Request fail                    | Một Google read + một Lark read + một Lark write |
+| Sheet schema đổi    | Range/read/write fail           | Fail fast, log provider error                    |
+| Pool chứa type lạ   | Mapping không xác định          | Reject thay vì stringify âm thầm                 |
+| Trigger timing      | Không bảo đảm 09:00:00.000      | Chỉ cam kết trigger gần 09:00                    |
 
 ---
 

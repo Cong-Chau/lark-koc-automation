@@ -26,9 +26,11 @@
 **Depends on:** Subplan 5
 
 **Files:**
+
 - Create: `.env.example`
 
 **Interfaces:**
+
 - Consumes the route URL `/api/append-koc` and the environment contract from Subplan 1.
 - Produces a deployment-ready environment template and one QStash schedule configuration.
 
@@ -37,6 +39,7 @@
 Create `.env.example` with empty values for:
 
 ```env
+DEV=false
 GOOGLE_SERVICE_ACCOUNT_EMAIL=
 GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY=
 GOOGLE_POOL_SPREADSHEET_ID=
@@ -44,7 +47,7 @@ GOOGLE_POOL_SHEET_NAME=
 LARK_APP_ID=
 LARK_APP_SECRET=
 LARK_DOMAIN=lark
-LARK_TARGET_SPREADSHEET_TOKEN=
+LARK_WIKI_NODE_TOKEN=
 LARK_TARGET_SHEET_ID=
 ```
 

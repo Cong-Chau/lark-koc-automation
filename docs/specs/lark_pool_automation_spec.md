@@ -25,6 +25,10 @@ Automation chỉ được append data vào cột L, không thay đổi các cộ
 
 Sẽ có một sheet riêng dùng làm **Pool Sheet**.
 
+**Google Pool Sheet URL:**
+
+https://docs.google.com/spreadsheets/d/1tr2EODsCx418tniHX4hO8kf2Ek7nPPGBaFMFuHA6V6o/edit?gid=0#gid=0
+
 Pool Sheet là nơi user tự chuẩn bị data mỗi buổi sáng.
 
 Quy trình phía user:

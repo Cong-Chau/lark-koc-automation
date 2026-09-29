@@ -1,8 +1,6 @@
 import type { Client } from "@larksuiteoapi/node-sdk";
 
-import { type AutomationConfig } from "@/lib/config";
 import { AutomationError } from "@/lib/errors";
-import { createLarkClient } from "@/lib/lark-client";
 import type {
   LarkColumnRead,
   PoolCellValue,
@@ -35,6 +33,11 @@ type LarkWriteData = {
   updatedRows?: unknown;
   updatedColumns?: unknown;
   updatedCells?: unknown;
+};
+
+type LarkTargetSheetConfig = {
+  larkTargetSheetId: string;
+  getSpreadsheetToken: () => Promise<string>;
 };
 
 class OpenEndedRangeRejected extends Error {}
@@ -263,17 +266,24 @@ function isBoundedColumnLRange(range: string, sheetId: string): boolean {
 }
 
 export function createLarkTargetSheet(
-  config: AutomationConfig,
-  client: Client = createLarkClient(config),
+  config: LarkTargetSheetConfig,
+  client: Client,
 ): TargetSheet {
   const openEndedRange = `${config.larkTargetSheetId}!L1:L`;
+  let spreadsheetTokenPromise: Promise<string> | undefined;
+
+  function getSpreadsheetToken(): Promise<string> {
+    spreadsheetTokenPromise ??= config.getSpreadsheetToken();
+    return spreadsheetTokenPromise;
+  }
 
   async function readRowCount(): Promise<number> {
+    const spreadsheetToken = await getSpreadsheetToken();
     const response = await requestJson<LarkSheetQueryData>(
       client,
       {
         method: "GET",
-        url: `${SHEETS_QUERY_PATH}/${encodePathSegment(config.larkTargetSpreadsheetToken)}/sheets/query`,
+        url: `${SHEETS_QUERY_PATH}/${encodePathSegment(spreadsheetToken)}/sheets/query`,
       },
       "read",
     );
@@ -286,11 +296,12 @@ export function createLarkTargetSheet(
   }
 
   async function readRange(range: string): Promise<LarkColumnRead> {
+    const spreadsheetToken = await getSpreadsheetToken();
     const response = await requestJson<LarkValueRangeData>(
       client,
       {
         method: "GET",
-        url: `${VALUES_PATH}/${encodePathSegment(config.larkTargetSpreadsheetToken)}/values/${encodePathSegment(range)}`,
+        url: `${VALUES_PATH}/${encodePathSegment(spreadsheetToken)}/values/${encodePathSegment(range)}`,
       },
       "read",
     );
@@ -356,6 +367,8 @@ export function createLarkTargetSheet(
     },
 
     async writeColumnL(range: string, values: PoolCellValue[]) {
+      const spreadsheetToken = await getSpreadsheetToken();
+
       if (!isBoundedColumnLRange(range, config.larkTargetSheetId)) {
         throw new AutomationError({
           code: "TARGET_RANGE_INVALID",
@@ -379,7 +392,7 @@ export function createLarkTargetSheet(
         client,
         {
           method: "PUT",
-          url: `${VALUES_PATH}/${encodePathSegment(config.larkTargetSpreadsheetToken)}/values`,
+          url: `${VALUES_PATH}/${encodePathSegment(spreadsheetToken)}/values`,
           data: {
             valueRange: {
               range,
