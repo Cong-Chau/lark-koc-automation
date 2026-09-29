@@ -6,15 +6,22 @@ export const AUTOMATION_ERROR_CODES = [
   "LARK_READ_FAILED",
   "TARGET_RANGE_INVALID",
   "LARK_WRITE_FAILED",
+  "REDIS_READ_FAILED",
+  "REDIS_WRITE_FAILED",
+  "PREPARED_JOB_MISSING",
+  "PREPARED_JOB_EXPIRED",
+  "PREPARED_JOB_INVALID",
   "PROVIDER_RESPONSE_INVALID",
   "JOB_TIMEOUT",
 ] as const;
 
 export type AutomationErrorCode = (typeof AUTOMATION_ERROR_CODES)[number];
 
-export type AutomationProvider = "config" | "google" | "lark" | "qstash" | "internal";
+export type AutomationProvider =
+  "config" | "google" | "lark" | "qstash" | "redis" | "internal";
 
-export type AutomationOperation = "config" | "create" | "read" | "write" | "job";
+export type AutomationOperation =
+  "config" | "create" | "read" | "write" | "prepare" | "job";
 
 export type AutomationErrorOptions = {
   code: AutomationErrorCode;

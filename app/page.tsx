@@ -11,7 +11,13 @@ export default function Home() {
               Màn hình runtime
             </h1>
           </div>
-          <div className="grid gap-2 text-sm text-zinc-400 md:grid-cols-2">
+          <div className="grid gap-2 text-sm text-zinc-400 md:grid-cols-3">
+            <div className="rounded-lg border border-zinc-800 px-3 py-2">
+              <span className="text-zinc-500">Endpoint chuẩn bị</span>
+              <p className="mt-1 font-mono text-zinc-200">
+                POST /api/prepare-koc
+              </p>
+            </div>
             <div className="rounded-lg border border-zinc-800 px-3 py-2">
               <span className="text-zinc-500">Endpoint ghi dữ liệu</span>
               <p className="mt-1 font-mono text-zinc-200">
@@ -28,9 +34,9 @@ export default function Home() {
 
       <section className="mx-auto w-full max-w-6xl px-5 py-6">
         <div className="mb-5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-          Chạy thủ công sẽ gọi endpoint ghi dữ liệu thật và có thể append dòng
-          thật vào Lark. Log chỉ được giữ trong bộ nhớ của server process hiện
-          tại và vẫn được in ra console.
+          Job chuẩn bị sẽ đọc dữ liệu và lưu kế hoạch ghi vào Redis. Job ghi sẽ
+          append dòng thật vào Lark từ kế hoạch đã chuẩn bị. Log chỉ được giữ
+          trong bộ nhớ của server process hiện tại và vẫn được in ra console.
         </div>
         <RuntimeLogsPanel />
       </section>

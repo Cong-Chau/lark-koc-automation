@@ -8,7 +8,7 @@ type RuntimeLogEvent = {
   id: string;
   timestamp: string;
   level: "info" | "error";
-  operation: "append-koc";
+  operation: "append-koc" | "prepare-koc";
   phase: string;
   message: string;
   runId?: string;
@@ -24,8 +24,21 @@ type RuntimeLogSnapshot = {
 };
 
 type TriggerResponse =
-  | { status: "success"; count: number; startRow: number; endRow: number }
-  | { status: "skipped"; reason: "POOL_EMPTY" }
+  | {
+      status: "success";
+      count: number;
+      startRow: number;
+      endRow: number;
+      targetRange?: string;
+      preparedAt?: string;
+      expiresAt?: string;
+    }
+  | {
+      status: "skipped";
+      reason: "POOL_EMPTY";
+      preparedAt?: string;
+      expiresAt?: string;
+    }
   | { status: "error" };
 
 type TriggerResult = {
@@ -39,7 +52,11 @@ type ExportResult = {
 };
 
 const PHASE_LABELS: Record<string, string> = {
+  prepare_job_started: "Bắt đầu job chuẩn bị",
   job_started: "Bắt đầu job",
+  prepared_job_saved: "Đã lưu dữ liệu chuẩn bị",
+  prepared_job_read_started: "Bắt đầu đọc dữ liệu đã chuẩn bị",
+  prepared_job_read_finished: "Đã đọc dữ liệu đã chuẩn bị",
   google_pool_read_started: "Bắt đầu đọc Google Pool",
   google_pool_read_finished: "Đã đọc Google Pool",
   pool_empty: "Google Pool rỗng",
@@ -178,7 +195,9 @@ export function RuntimeLogsPanel() {
   const [triggerResult, setTriggerResult] = useState<TriggerResult | null>(
     null,
   );
-  const [isTriggering, setIsTriggering] = useState(false);
+  const [runningJob, setRunningJob] = useState<"prepare" | "append" | null>(
+    null,
+  );
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
   const [isExporting, setIsExporting] = useState(false);
 
@@ -277,57 +296,66 @@ export function RuntimeLogsPanel() {
     };
   }, [loadLogs]);
 
-  const triggerJob = useCallback(async () => {
-    const confirmed = window.confirm(
-      "Chạy job append ngay bây giờ? Job này có thể ghi dữ liệu thật từ Google Pool vào cột L trên Lark.",
-    );
+  const triggerJob = useCallback(
+    async (job: "prepare" | "append") => {
+      const isPrepare = job === "prepare";
+      const confirmed = window.confirm(
+        isPrepare
+          ? "Chạy job chuẩn bị ngay bây giờ? Job này sẽ đọc Google Pool, đọc cột L trên Lark và lưu kế hoạch ghi vào Redis."
+          : "Chạy job ghi ngay bây giờ? Job này sẽ lấy dữ liệu đã chuẩn bị và ghi thật vào cột L trên Lark.",
+      );
 
-    if (!confirmed) {
-      return;
-    }
-
-    setIsTriggering(true);
-    setTriggerResult(null);
-
-    try {
-      const response = await fetch("/api/append-koc", {
-        method: "POST",
-        cache: "no-store",
-      });
-      const body = (await response.json()) as TriggerResponse;
-
-      if (!response.ok || body.status === "error") {
-        throw new Error(
-          `POST /api/append-koc returned HTTP ${response.status}`,
-        );
+      if (!confirmed) {
+        return;
       }
 
-      if (body.status === "success") {
-        setTriggerResult({
-          tone: "success",
-          message: `Đã append ${body.count} dòng vào L${body.startRow}:L${body.endRow}.`,
-        });
-      } else {
-        setTriggerResult({
-          tone: "skipped",
-          message: "Job được bỏ qua vì Google Pool đang rỗng.",
-        });
-      }
+      setRunningJob(job);
+      setTriggerResult(null);
 
-      await loadLogs();
-    } catch (triggerError) {
-      setTriggerResult({
-        tone: "error",
-        message:
-          triggerError instanceof Error
-            ? triggerError.message
-            : "Trigger thủ công thất bại.",
-      });
-      await loadLogs();
-    } finally {
-      setIsTriggering(false);
-    }
-  }, [loadLogs]);
+      try {
+        const endpoint = isPrepare ? "/api/prepare-koc" : "/api/append-koc";
+        const response = await fetch(endpoint, {
+          method: "POST",
+          cache: "no-store",
+        });
+        const body = (await response.json()) as TriggerResponse;
+
+        if (!response.ok || body.status === "error") {
+          throw new Error(`POST ${endpoint} returned HTTP ${response.status}`);
+        }
+
+        if (body.status === "success") {
+          setTriggerResult({
+            tone: "success",
+            message: isPrepare
+              ? `Đã chuẩn bị ${body.count} dòng cho ${body.targetRange ?? `L${body.startRow}:L${body.endRow}`}.`
+              : `Đã ghi ${body.count} dòng vào L${body.startRow}:L${body.endRow}.`,
+          });
+        } else {
+          setTriggerResult({
+            tone: "skipped",
+            message: isPrepare
+              ? "Đã lưu trạng thái bỏ qua vì Google Pool đang rỗng."
+              : "Job ghi được bỏ qua vì dữ liệu đã chuẩn bị là Pool rỗng.",
+          });
+        }
+
+        await loadLogs();
+      } catch (triggerError) {
+        setTriggerResult({
+          tone: "error",
+          message:
+            triggerError instanceof Error
+              ? triggerError.message
+              : "Trigger thủ công thất bại.",
+        });
+        await loadLogs();
+      } finally {
+        setRunningJob(null);
+      }
+    },
+    [loadLogs],
+  );
 
   const latestEvent = snapshot?.events[0];
   const detailRows = useMemo(() => {
@@ -341,21 +369,35 @@ export function RuntimeLogsPanel() {
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <h2 className="text-sm font-semibold text-zinc-100">
-              Chạy thủ công
+              Chạy thủ công 2 job
             </h2>
             <p className="mt-1 text-sm text-zinc-500">
-              Chạy cùng job append mà QStash sử dụng. Dùng dòng test trong
-              Google Pool khi bạn chỉ muốn kiểm tra kết nối.
+              Job 1 chuẩn bị dữ liệu và tính sẵn range ghi. Job 2 dùng dữ liệu
+              đã chuẩn bị để ghi nhanh vào Lark.
             </p>
           </div>
-          <button
-            className="h-10 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 text-sm font-semibold text-amber-100 transition hover:border-amber-400 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-            type="button"
-            disabled={isTriggering}
-            onClick={() => void triggerJob()}
-          >
-            {isTriggering ? "Đang chạy..." : "Chạy ngay"}
-          </button>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <button
+              className="h-10 rounded-md border border-sky-500/40 bg-sky-500/10 px-4 text-sm font-semibold text-sky-100 transition hover:border-sky-400 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              type="button"
+              disabled={runningJob !== null}
+              onClick={() => void triggerJob("prepare")}
+            >
+              {runningJob === "prepare"
+                ? "Đang chuẩn bị..."
+                : "Chuẩn bị dữ liệu"}
+            </button>
+            <button
+              className="h-10 rounded-md border border-amber-500/40 bg-amber-500/10 px-4 text-sm font-semibold text-amber-100 transition hover:border-amber-400 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              type="button"
+              disabled={runningJob !== null}
+              onClick={() => void triggerJob("append")}
+            >
+              {runningJob === "append"
+                ? "Đang ghi..."
+                : "Ghi dữ liệu đã chuẩn bị"}
+            </button>
+          </div>
         </div>
         {triggerResult ? (
           <div

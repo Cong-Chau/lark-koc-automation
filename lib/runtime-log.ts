@@ -1,12 +1,15 @@
 export type RuntimeLogLevel = "info" | "error";
 
-export type RuntimeLogDetails = Record<string, string | number | boolean | null>;
+export type RuntimeLogDetails = Record<
+  string,
+  string | number | boolean | null
+>;
 
 export type RuntimeLogEvent = {
   id: string;
   timestamp: string;
   level: RuntimeLogLevel;
-  operation: "append-koc";
+  operation: "append-koc" | "prepare-koc";
   phase: string;
   message: string;
   runId?: string;
