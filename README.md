@@ -14,7 +14,7 @@ Subplan foundation đã hoàn thành:
 - sanitized provider errors;
 - Google Sheets dependency và static typecheck command.
 
-Các adapter Google/Lark, orchestration route và QStash runtime được theo dõi trong
+Các adapter Google/Lark và orchestration route được theo dõi trong
 [master implementation plan](docs/plans/2026-09-19-lark-pool-automation.md).
 
 ## Luồng hoạt động
@@ -22,7 +22,7 @@ Các adapter Google/Lark, orchestration route và QStash runtime được theo d
 ```text
 User cập nhật Google Pool trước 09:00
               ↓
-QStash prepare schedule: 08:59 Asia/Ho_Chi_Minh
+EC2 cron prepare: 08:59 Asia/Ho_Chi_Minh
               ↓
 POST /api/prepare-koc
               ↓
@@ -30,9 +30,9 @@ POST /api/prepare-koc
               ↓
 Đọc Lark target: <SHEET_ID>!L1:L
               ↓
-Tính sẵn target range và lưu Redis
+Tính sẵn target range và lưu file cache local
               ↓
-QStash append schedule: 09:00 Asia/Ho_Chi_Minh
+EC2 cron append: 09:00 Asia/Ho_Chi_Minh
               ↓
 POST /api/append-koc
               ↓
@@ -47,11 +47,12 @@ với trạng thái `skipped` và không chạm vào Lark.
 
 - TypeScript
 - Next.js 16 App Router và Route Handlers
-- Vercel
+- AWS EC2
 - Google Sheets API v4 qua `googleapis`
 - Lark Open API qua `@larksuiteoapi/node-sdk`
-- Upstash QStash
-- Upstash Redis
+- Linux cron
+- Local filesystem prepared payload cache
+- Nodemailer SMTP email
 - Zod
 - pnpm `10.33.0`
 
@@ -64,8 +65,9 @@ Không dùng database riêng, queue riêng, lock phân tán hoặc idempotency c
 - Một Google Cloud service account đã bật Google Sheets API.
 - Google Pool spreadsheet được share cho service account với quyền `Viewer`.
 - Lark app có quyền đọc/ghi spreadsheet đích.
-- Upstash Redis REST database để lưu prepared payload ngắn hạn.
-- Hai QStash schedules trỏ tới deployment URL trên Vercel.
+- Một EC2 instance chạy cả app và cron local để dùng chung file cache ngắn hạn.
+- Gmail App Password hoặc SMTP credential tương đương nếu bật email log.
+- Hai cron entries trên cùng EC2 instance.
 
 ## Cài đặt và chạy local
 
@@ -88,11 +90,12 @@ phân biệt lỗi nền của repository với lỗi trong source automation đ
 
 ## Environment variables
 
-Tạo `.env.local` ở local hoặc cấu hình các biến tương ứng trong Vercel:
+Tạo `.env.local` ở local hoặc trên EC2:
 
 ```env
 DEV=false
 PREPARED_JOB_MAX_AGE_SECONDS=600
+PREPARED_JOB_FILE_PATH=.runtime/prepared-job.json
 
 # Google service account
 GOOGLE_SERVICE_ACCOUNT_EMAIL=
@@ -107,9 +110,15 @@ LARK_DOMAIN=lark
 LARK_WIKI_NODE_TOKEN=
 LARK_TARGET_SHEET_ID=
 
-# Upstash Redis prepared job cache
-UPSTASH_REDIS_REST_URL=
-UPSTASH_REDIS_REST_TOKEN=
+# Email notification
+EMAIL_ENABLED=false
+EMAIL_SMTP_HOST=smtp.gmail.com
+EMAIL_SMTP_PORT=465
+EMAIL_SMTP_SECURE=true
+EMAIL_SMTP_USER=
+EMAIL_SMTP_PASSWORD=
+EMAIL_FROM=
+EMAIL_TO=
 ```
 
 `GOOGLE_POOL_SHEET_NAME` là tên tab bên trong Google Spreadsheet, không phải
@@ -125,9 +134,18 @@ Wiki node này sang spreadsheet object token trước khi gọi Sheets API.
 `PREPARED_JOB_MAX_AGE_SECONDS` giới hạn tuổi payload đã chuẩn bị. Production
 khuyến nghị `600` giây để job ghi không dùng nhầm dữ liệu cũ.
 
+`PREPARED_JOB_FILE_PATH` là nơi lưu prepared payload giữa job chuẩn bị và job
+ghi. Nếu là relative path, app resolve từ thư mục chạy process. Production EC2
+dùng mặc định `.runtime/prepared-job.json`. File cache này phù hợp khi cả 2 job
+chạy trên cùng một server; không dùng cách này cho serverless nhiều instance.
+
+`EMAIL_ENABLED=true` bật gửi email sau khi `/api/append-koc` ghi Lark thành
+công. Với Gmail, dùng App Password cho `EMAIL_SMTP_PASSWORD`, không dùng mật
+khẩu đăng nhập Google thường. `EMAIL_TO` có thể chứa nhiều email, phân tách bằng
+dấu phẩy. Nếu gửi email lỗi, app chỉ ghi log `email_failed`; dữ liệu đã ghi vào
+Lark vẫn được xem là thành công.
+
 Không commit private key, app secret, access token hoặc dữ liệu Pool vào Git.
-`QSTASH_TOKEN` chỉ dùng trong môi trường provisioning schedule, không cần đưa vào
-route runtime khi schedule được quản lý từ QStash Console.
 
 ## HTTP endpoint
 
@@ -164,10 +182,9 @@ cấp:
 GET /api/logs
 ```
 
-Log UI dùng in-memory ring buffer và vẫn mirror ra console/Vercel logs. Không
-ghi database hoặc filesystem; khi server process restart thì log trong UI mất.
-Trên serverless deployment, view này là best-effort theo instance hiện tại, phù
-hợp debug live nhẹ hơn là audit history.
+Log UI dùng in-memory ring buffer và vẫn mirror ra console/PM2 logs. Không ghi
+database; khi server process restart thì log trong UI mất. Prepared payload là
+file cache riêng và vẫn còn trên disk đến khi bị ghi đè hoặc hết hạn TTL.
 
 Dashboard có 2 nút thủ công:
 
@@ -176,26 +193,18 @@ Dashboard có 2 nút thủ công:
 
 Nút ghi có thể append dữ liệu thật vào Lark nếu prepared payload còn hạn.
 
-## QStash schedule
+## EC2 cron schedule
 
-Sau khi deploy lên Vercel, tạo hoặc cập nhật 2 schedule cố định:
-
-```text
-Destination: https://<vercel-domain>/api/prepare-koc
-Method: POST
-Cron: CRON_TZ=Asia/Ho_Chi_Minh 59 8 * * *
-Retries: 0
-```
+Sau khi deploy lên EC2, tạo hoặc cập nhật 2 cron entries cố định:
 
 ```text
-Destination: https://<vercel-domain>/api/append-koc
-Method: POST
-Cron: CRON_TZ=Asia/Ho_Chi_Minh 0 9 * * *
-Retries: 0
+TZ=Asia/Ho_Chi_Minh
+59 8 * * * curl -s -X POST http://127.0.0.1:3000/api/prepare-koc >> /home/ubuntu/lark-koc-cron.log 2>&1
+0 9 * * * curl -s -X POST http://127.0.0.1:3000/api/append-koc >> /home/ubuntu/lark-koc-cron.log 2>&1
 ```
 
-Không tạo nhiều schedule cùng gọi `/api/append-koc`. Xem hướng dẫn chi tiết tại
-[QStash two-job schedule](docs/runbooks/qstash-two-job-schedule.md).
+Không tạo nhiều schedule cùng gọi `/api/append-koc`, vì MVP không dedupe và có
+thể append trùng.
 
 ## Cấu trúc dự án
 

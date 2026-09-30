@@ -1,16 +1,23 @@
-import { Redis } from "@upstash/redis";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, resolve } from "node:path";
 
 import type { AutomationConfig } from "@/lib/config";
 import { AutomationError } from "@/lib/errors";
 import type { PoolCellValue, PreparedAppendJob } from "@/types/automation";
 
-const PREPARED_JOB_KEY = "lark-koc-automation:prepared-job";
-const TTL_GRACE_SECONDS = 300;
-
 type PreparedJobStore = {
   save(job: PreparedAppendJob): Promise<void>;
   read(): Promise<PreparedAppendJob>;
 };
+
+function resolvePreparedJobPath(config: AutomationConfig): string {
+  return isAbsolute(config.preparedJobFilePath)
+    ? config.preparedJobFilePath
+    : resolve(
+        /*turbopackIgnore: true*/ process.cwd(),
+        config.preparedJobFilePath,
+      );
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -78,22 +85,19 @@ function parsePreparedJob(value: unknown): PreparedAppendJob {
 export function createPreparedJobStore(
   config: AutomationConfig,
 ): PreparedJobStore {
-  const redis = new Redis({
-    url: config.upstashRedisRestUrl,
-    token: config.upstashRedisRestToken,
-  });
-  const ttlSeconds = config.preparedJobMaxAgeSeconds + TTL_GRACE_SECONDS;
+  const filePath = resolvePreparedJobPath(config);
+  const tempFilePath = `${filePath}.tmp`;
 
   return {
     async save(job) {
       try {
-        await redis.set(PREPARED_JOB_KEY, JSON.stringify(job), {
-          ex: ttlSeconds,
-        });
+        await mkdir(dirname(filePath), { recursive: true });
+        await writeFile(tempFilePath, JSON.stringify(job), "utf8");
+        await rename(tempFilePath, filePath);
       } catch (error) {
         throw new AutomationError({
-          code: "REDIS_WRITE_FAILED",
-          provider: "redis",
+          code: "PREPARED_JOB_WRITE_FAILED",
+          provider: "filesystem",
           operation: "write",
           cause: error,
         });
@@ -101,24 +105,29 @@ export function createPreparedJobStore(
     },
 
     async read() {
-      let rawValue: unknown;
+      let rawValue: string;
 
       try {
-        rawValue = await redis.get(PREPARED_JOB_KEY);
+        rawValue = await readFile(filePath, "utf8");
       } catch (error) {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "ENOENT"
+        ) {
+          throw new AutomationError({
+            code: "PREPARED_JOB_MISSING",
+            provider: "filesystem",
+            operation: "read",
+            cause: error,
+          });
+        }
+
         throw new AutomationError({
-          code: "REDIS_READ_FAILED",
-          provider: "redis",
+          code: "PREPARED_JOB_READ_FAILED",
+          provider: "filesystem",
           operation: "read",
           cause: error,
-        });
-      }
-
-      if (rawValue === null) {
-        throw new AutomationError({
-          code: "PREPARED_JOB_MISSING",
-          provider: "redis",
-          operation: "read",
         });
       }
 
@@ -127,7 +136,7 @@ export function createPreparedJobStore(
       } catch (error) {
         throw new AutomationError({
           code: "PREPARED_JOB_INVALID",
-          provider: "redis",
+          provider: "filesystem",
           operation: "read",
           cause: error,
         });

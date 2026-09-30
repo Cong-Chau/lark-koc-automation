@@ -1,5 +1,9 @@
 # QStash two-job schedule
 
+> Legacy note: production hiện tại đã chuyển sang EC2 cron và local file cache.
+> Không dùng hướng dẫn này cho runtime hiện tại, vì QStash/Vercel có thể chạy 2
+> job trên instance khác nhau và không chia sẻ được `.runtime/prepared-job.json`.
+
 Automation production dùng 2 job để giảm thời gian ghi lúc 09:00.
 
 ## Job 1: prepare KOC
@@ -19,7 +23,7 @@ Job prepare sẽ:
 - resolve Lark Wiki node sang spreadsheet token;
 - đọc cột L của target sheet;
 - tính sẵn `startRow`, `endRow`, `targetRange`;
-- lưu prepared payload vào Upstash Redis.
+- lưu prepared payload vào local file cache trên cùng server.
 
 Prepared payload mặc định chỉ hợp lệ trong `PREPARED_JOB_MAX_AGE_SECONDS`.
 Giá trị khuyến nghị cho production là `600` giây.
@@ -37,7 +41,7 @@ Retries: 0
 
 Job append sẽ:
 
-- đọc prepared payload từ Upstash Redis;
+- đọc prepared payload từ local file cache trên cùng server;
 - kiểm tra payload còn hạn;
 - ghi thẳng vào `targetRange` đã tính sẵn;
 - không đọc Google Pool;
@@ -46,12 +50,11 @@ Job append sẽ:
 
 ## Environment variables
 
-Vercel Production cần có thêm:
+Runtime hiện tại cần có thêm:
 
 ```env
-UPSTASH_REDIS_REST_URL=
-UPSTASH_REDIS_REST_TOKEN=
 PREPARED_JOB_MAX_AGE_SECONDS=600
+PREPARED_JOB_FILE_PATH=.runtime/prepared-job.json
 ```
 
 Giữ `DEV=false` trong production. Khi cần debug step chi tiết, tạm đổi

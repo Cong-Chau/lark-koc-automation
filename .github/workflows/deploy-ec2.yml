@@ -1,0 +1,61 @@
+name: Deploy EC2
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-ec2-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy production
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Validate required secrets
+        env:
+          AWS_EC2_HOST: ${{ secrets.AWS_EC2_HOST }}
+          AWS_EC2_USER: ${{ secrets.AWS_EC2_USER }}
+          AWS_EC2_SSH_KEY: ${{ secrets.AWS_EC2_SSH_KEY }}
+          AWS_EC2_APP_DIR: ${{ secrets.AWS_EC2_APP_DIR }}
+        run: |
+          set -euo pipefail
+          test -n "$AWS_EC2_HOST"
+          test -n "$AWS_EC2_USER"
+          test -n "$AWS_EC2_SSH_KEY"
+          test -n "$AWS_EC2_APP_DIR"
+
+      - name: Deploy over SSH
+        env:
+          AWS_EC2_HOST: ${{ secrets.AWS_EC2_HOST }}
+          AWS_EC2_USER: ${{ secrets.AWS_EC2_USER }}
+          AWS_EC2_SSH_KEY: ${{ secrets.AWS_EC2_SSH_KEY }}
+          AWS_EC2_APP_DIR: ${{ secrets.AWS_EC2_APP_DIR }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p ~/.ssh
+          printf '%s\n' "$AWS_EC2_SSH_KEY" > ~/.ssh/lark-koc-ec2
+          chmod 600 ~/.ssh/lark-koc-ec2
+          ssh-keyscan -H "$AWS_EC2_HOST" >> ~/.ssh/known_hosts
+
+          ssh -i ~/.ssh/lark-koc-ec2 "$AWS_EC2_USER@$AWS_EC2_HOST" <<REMOTE
+          set -euo pipefail
+          cd "$AWS_EC2_APP_DIR"
+
+          git fetch origin main
+          git switch main || git switch -c main --track origin/main
+          git pull --ff-only origin main
+
+          pnpm install --frozen-lockfile
+          NODE_OPTIONS="--max-old-space-size=2560" pnpm run build
+
+          pm2 restart lark-koc --update-env
+          pm2 save
+          curl -fsS http://127.0.0.1:3000 >/dev/null
+          REMOTE

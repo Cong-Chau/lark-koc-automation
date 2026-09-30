@@ -34,9 +34,10 @@ export default function Home() {
 
       <section className="mx-auto w-full max-w-6xl px-5 py-6">
         <div className="mb-5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-          Job chuẩn bị sẽ đọc dữ liệu và lưu kế hoạch ghi vào Redis. Job ghi sẽ
-          append dòng thật vào Lark từ kế hoạch đã chuẩn bị. Log chỉ được giữ
-          trong bộ nhớ của server process hiện tại và vẫn được in ra console.
+          Job chuẩn bị sẽ đọc dữ liệu và lưu kế hoạch ghi vào file cache local.
+          Job ghi sẽ append dòng thật vào Lark từ kế hoạch đã chuẩn bị. Log chỉ
+          được giữ trong bộ nhớ của server process hiện tại và vẫn được in ra
+          console.
         </div>
         <RuntimeLogsPanel />
       </section>

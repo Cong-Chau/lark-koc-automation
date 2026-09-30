@@ -4,9 +4,10 @@ import { createLarkTargetSheet } from "@/lib/lark-sheets";
 import { resolveLarkSpreadsheetToken } from "@/lib/lark-wiki";
 import { createAppendPlan } from "@/lib/append-plan";
 import { getAutomationConfig, type AutomationConfig } from "@/lib/config";
-import { AutomationError } from "@/lib/errors";
+import { sendAppendSuccessEmail } from "@/lib/email-notification";
+import { AutomationError, toSafeErrorFields } from "@/lib/errors";
 import { createPreparedJobStore } from "@/lib/prepared-job-store";
-import { logRuntimeInfo } from "@/lib/runtime-log";
+import { logRuntimeError, logRuntimeInfo } from "@/lib/runtime-log";
 import type {
   JobResult,
   PoolReader,
@@ -55,7 +56,7 @@ function assertPreparedJobIsFresh(
   ) {
     throw new AutomationError({
       code: "PREPARED_JOB_EXPIRED",
-      provider: "redis",
+      provider: "filesystem",
       operation: "read",
     });
   }
@@ -122,7 +123,7 @@ async function writePreparedJob(
   runId: string,
   trigger: AppendTrigger,
   logSteps: boolean,
-): Promise<JobResult> {
+): Promise<Extract<JobResult, { status: "success" }>> {
   logDevInfo(logSteps, {
     operation: "append-koc",
     runId,
@@ -159,6 +160,66 @@ async function writePreparedJob(
   });
 
   return result;
+}
+
+async function notifyAppendSuccess(
+  config: AutomationConfig,
+  preparedJob: Extract<PreparedAppendJob, { status: "ready" }>,
+  result: Extract<JobResult, { status: "success" }>,
+  startedAt: number,
+  runId: string,
+  trigger: AppendTrigger,
+): Promise<void> {
+  if (!config.email.enabled) {
+    return;
+  }
+
+  logRuntimeInfo({
+    operation: "append-koc",
+    runId,
+    trigger,
+    phase: "email_send_started",
+    message: "Bắt đầu gửi email log sau khi ghi target sheet",
+    status: "started",
+    details: {
+      recipientCount: config.email.to.length,
+      targetRange: preparedJob.targetRange,
+    },
+  });
+
+  try {
+    await sendAppendSuccessEmail({
+      config,
+      runId,
+      trigger,
+      result,
+      preparedJob,
+      durationMs: Date.now() - startedAt,
+    });
+
+    logRuntimeInfo({
+      operation: "append-koc",
+      runId,
+      trigger,
+      phase: "email_sent",
+      message: "Đã gửi email log sau khi ghi target sheet",
+      status: "success",
+      details: {
+        recipientCount: config.email.to.length,
+        durationMs: Date.now() - startedAt,
+      },
+    });
+  } catch (error) {
+    logRuntimeError({
+      operation: "append-koc",
+      runId,
+      trigger,
+      phase: "email_failed",
+      message: "Gửi email log thất bại sau khi ghi target sheet",
+      status: "error",
+      details: toSafeErrorFields(error),
+    });
+  }
 }
 
 export async function runPrepareKoc(
@@ -338,7 +399,7 @@ export async function runAppendKoc(
     if (preparedJob.targetSheetId !== config.larkTargetSheetId) {
       throw new AutomationError({
         code: "PREPARED_JOB_INVALID",
-        provider: "redis",
+        provider: "filesystem",
         operation: "read",
       });
     }
@@ -367,7 +428,7 @@ export async function runAppendKoc(
       larkClient,
     );
 
-    return writePreparedJob(
+    const result = await writePreparedJob(
       targetSheet,
       preparedJob,
       startedAt,
@@ -375,6 +436,17 @@ export async function runAppendKoc(
       trigger,
       logSteps,
     );
+
+    await notifyAppendSuccess(
+      config,
+      preparedJob,
+      result,
+      startedAt,
+      runId,
+      trigger,
+    );
+
+    return result;
   }
 
   const logSteps = process.env.DEV === "true";

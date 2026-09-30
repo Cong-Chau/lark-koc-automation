@@ -11,10 +11,9 @@
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.74.0",
-    "@upstash/qstash": "^2.11.3",
-    "@upstash/redis": "^1.39.0",
     "googleapis": "^161.0.0",
     "next": "16.3.5",
+    "nodemailer": "^10.0.13",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "zod": "^4.6.5"
@@ -22,6 +21,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/nodemailer": "^8.0.2",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
