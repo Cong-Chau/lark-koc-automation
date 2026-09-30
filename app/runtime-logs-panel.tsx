@@ -67,6 +67,9 @@ const PHASE_LABELS: Record<string, string> = {
   append_plan_created: "Đã tạo kế hoạch append",
   lark_write_started: "Bắt đầu ghi vào target sheet",
   target_sheet_written: "Đã ghi xong target sheet",
+  email_send_started: "Bắt đầu gửi email log",
+  email_sent: "Đã gửi email log",
+  email_failed: "Gửi email log thất bại",
   job_failed: "Job thất bại",
 };
 
@@ -82,6 +85,7 @@ const DETAIL_LABELS: Record<string, string> = {
   operation: "tác vụ",
   requestId: "requestId",
   errorType: "loại lỗi",
+  recipientCount: "số người nhận",
 };
 
 function getStatusClass(
@@ -301,7 +305,7 @@ export function RuntimeLogsPanel() {
       const isPrepare = job === "prepare";
       const confirmed = window.confirm(
         isPrepare
-          ? "Chạy job chuẩn bị ngay bây giờ? Job này sẽ đọc Google Pool, đọc cột L trên Lark và lưu kế hoạch ghi vào Redis."
+          ? "Chạy job chuẩn bị ngay bây giờ? Job này sẽ đọc Google Pool, đọc cột L trên Lark và lưu kế hoạch ghi vào file cache local."
           : "Chạy job ghi ngay bây giờ? Job này sẽ lấy dữ liệu đã chuẩn bị và ghi thật vào cột L trên Lark.",
       );
 
