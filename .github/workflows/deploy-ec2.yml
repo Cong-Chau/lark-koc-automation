@@ -58,16 +58,20 @@ jobs:
           pm2 restart lark-koc --update-env
           pm2 save
 
+          health_check_passed=false
           for attempt in \$(seq 1 30); do
             if curl -fsS http://127.0.0.1:3000 >/dev/null; then
               echo "Health check passed on attempt \$attempt"
-              exit 0
+              health_check_passed=true
+              break
             fi
 
             echo "Waiting for app to listen on port 3000... attempt \$attempt/30"
             sleep 2
           done
 
-          pm2 logs lark-koc --lines 80 --nostream
-          exit 1
+          if [ "\$health_check_passed" != "true" ]; then
+            pm2 logs lark-koc --lines 80 --nostream
+            exit 1
+          fi
           REMOTE
