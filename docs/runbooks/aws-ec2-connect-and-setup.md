@@ -112,7 +112,7 @@ Public IPv4 address: <public-ip>
 Ví dụ:
 
 ```text
-18.140.231.27
+13.251.44.26
 ```
 
 ## 6. Connect bằng EC2 Instance Connect
@@ -151,7 +151,7 @@ ssh -i "C:\Users\ADMIN\Downloads\lark-koc-key.pem" ubuntu@<public-ip>
 Ví dụ:
 
 ```powershell
-ssh -i "C:\Users\ADMIN\Downloads\lark-koc-key.pem" ubuntu@18.140.231.27
+ssh -i "C:\Users\ADMIN\Downloads\lark-koc-key.pem" ubuntu@13.251.44.26
 ```
 
 Lần đầu SSH sẽ hỏi:
