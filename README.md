@@ -2,8 +2,8 @@
 
 Automation chạy hằng ngày lúc **09:00 theo giờ Việt Nam** để append dữ liệu từ
 Google Sheets Pool vào **cột L** của sheet `KOC List Official` trên Lark.
-Production dùng flow 2 job: chuẩn bị dữ liệu trước 09:00, rồi đến 09:00 chỉ ghi
-payload đã chuẩn bị.
+Production dùng flow 2 job: chuẩn bị dữ liệu trước 09:00, rồi script append
+chờ tới `08:59:59.650` mới ghi payload đã chuẩn bị.
 
 ## Trạng thái triển khai
 
@@ -22,7 +22,7 @@ Các adapter Google/Lark và orchestration route được theo dõi trong
 ```text
 User cập nhật Google Pool trước 09:00
               ↓
-EC2 cron prepare: 08:59 Asia/Ho_Chi_Minh
+EC2 cron prepare: 08:58 Asia/Ho_Chi_Minh
               ↓
 POST /api/prepare-koc
               ↓
@@ -32,7 +32,7 @@ POST /api/prepare-koc
               ↓
 Tính sẵn target range và lưu file cache local
               ↓
-EC2 cron append: 09:00 Asia/Ho_Chi_Minh
+EC2 cron append: 08:59, script waits until 08:59:59.650 Asia/Ho_Chi_Minh
               ↓
 POST /api/append-koc
               ↓
@@ -195,12 +195,21 @@ Nút ghi có thể append dữ liệu thật vào Lark nếu prepared payload c�
 
 ## EC2 cron schedule
 
-Sau khi deploy lên EC2, tạo hoặc cập nhật 2 cron entries cố định:
+Sau khi deploy lên EC2, cấp quyền chạy cho script append:
+
+```bash
+chmod +x /home/ubuntu/lark-koc-automation/scripts/append-at-target-time.sh
+```
+
+Tạo hoặc cập nhật 2 cron entries cố định. Job prepare chạy lúc `08:58`; job
+append bắt đầu lúc `08:59`, rồi script chờ tới `08:59:59.650` mới gọi endpoint
+ghi.
 
 ```text
+CRON_TZ=Asia/Ho_Chi_Minh
 TZ=Asia/Ho_Chi_Minh
-59 8 * * * curl -s -X POST http://127.0.0.1:3000/api/prepare-koc >> /home/ubuntu/lark-koc-cron.log 2>&1
-0 9 * * * curl -s -X POST http://127.0.0.1:3000/api/append-koc >> /home/ubuntu/lark-koc-cron.log 2>&1
+58 8 * * * date '+\%Y-\%m-\%d \%H:\%M:\%S prepare-09' >> /home/ubuntu/lark-koc-cron.log 2>&1; curl -sS -w '\nHTTP_STATUS=\%{http_code}\n' -X POST http://127.0.0.1:3000/api/prepare-koc >> /home/ubuntu/lark-koc-cron.log 2>&1
+59 8 * * * /home/ubuntu/lark-koc-automation/scripts/append-at-target-time.sh 08:59:59.650
 ```
 
 Không tạo nhiều schedule cùng gọi `/api/append-koc`, vì MVP không dedupe và có

@@ -240,11 +240,26 @@ Sau khi server có Node/pnpm/pm2:
 4. Chạy `pnpm install`.
 5. Chạy `pnpm run build`.
 6. Start app bằng `pm2`.
-7. Cấu hình cron local để gọi:
+7. Cấp quyền chạy cho script append chính xác theo millisecond:
+
+```bash
+chmod +x /home/ubuntu/lark-koc-automation/scripts/append-at-target-time.sh
+```
+
+8. Cấu hình cron local để gọi:
 
 ```text
-08:59 -> POST http://127.0.0.1:3000/api/prepare-koc
-09:00 -> POST http://127.0.0.1:3000/api/append-koc
+08:58 -> POST http://127.0.0.1:3000/api/prepare-koc
+08:59 -> run append script, wait until 08:59:59.650, then POST http://127.0.0.1:3000/api/append-koc
+```
+
+Crontab mẫu:
+
+```text
+CRON_TZ=Asia/Ho_Chi_Minh
+TZ=Asia/Ho_Chi_Minh
+58 8 * * * date '+\%Y-\%m-\%d \%H:\%M:\%S prepare-09' >> /home/ubuntu/lark-koc-cron.log 2>&1; curl -sS -w '\nHTTP_STATUS=\%{http_code}\n' -X POST http://127.0.0.1:3000/api/prepare-koc >> /home/ubuntu/lark-koc-cron.log 2>&1
+59 8 * * * /home/ubuntu/lark-koc-automation/scripts/append-at-target-time.sh 08:59:59.650
 ```
 
 ## 11. Prepared job cache trên EC2
